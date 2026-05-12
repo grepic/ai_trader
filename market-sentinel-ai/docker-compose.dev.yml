@@ -1,0 +1,22 @@
+# Development override — hot reload for backend, Vite dev server for frontend
+version: "3.9"
+
+services:
+  backend:
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    volumes:
+      - ./backend:/app  # Writable for hot reload
+
+  frontend:
+    build: .  # Not used in dev
+    image: node:20-alpine
+    container_name: sentinel_frontend_dev
+    working_dir: /app
+    command: npm run dev -- --host
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    ports:
+      - "3000:3000"
+    environment:
+      - VITE_API_URL=http://localhost:8000

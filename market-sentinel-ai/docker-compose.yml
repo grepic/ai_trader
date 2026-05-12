@@ -1,0 +1,88 @@
+version: "3.9"
+
+services:
+  # -----------------------------------------------------------------------
+  # PostgreSQL database
+  # -----------------------------------------------------------------------
+  db:
+    image: postgres:16-alpine
+    container_name: sentinel_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: sentinel
+      POSTGRES_PASSWORD: sentinel
+      POSTGRES_DB: market_sentinel
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sentinel -d market_sentinel"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # -----------------------------------------------------------------------
+  # Redis (scheduler / cache)
+  # -----------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: sentinel_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # -----------------------------------------------------------------------
+  # Backend API + Scheduler
+  # -----------------------------------------------------------------------
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: sentinel_backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://sentinel:sentinel@db:5432/market_sentinel
+      REDIS_URL: redis://redis:6379/0
+      PAPER_TRADING_ONLY: "true"
+      REAL_TRADING_ENABLED: "false"
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 40s
+      retries: 3
+    volumes:
+      - ./backend:/app:ro  # Read-only bind for dev hot reload
+
+  # -----------------------------------------------------------------------
+  # Frontend dashboard
+  # -----------------------------------------------------------------------
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: sentinel_frontend
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
+    name: sentinel_postgres_data
