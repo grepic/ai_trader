@@ -17,6 +17,7 @@ from app.services.reporting.reporter import ReportingService
 from app.services.risk.engine import RiskEngine
 from app.services.strategy.pnl_tracker import PnLTracker
 from app.services.strategy.trading_service import TradingService
+from app.ws.manager import ws_manager
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +98,16 @@ async def job_portfolio_snapshot() -> None:
             "Portfolio snapshot: equity=$%.2f positions=%d upl=$%.2f rpl=$%.2f",
             account.equity, len(positions), unrealized_pl, realized_pl,
         )
+
+        await ws_manager.broadcast("portfolio", {
+            "account_value": account.equity,
+            "cash_balance": account.cash,
+            "positions_value": positions_value,
+            "unrealized_pl": unrealized_pl,
+            "realized_pl_today": realized_pl,
+            "daily_pl": account.equity - account.last_equity,
+            "open_positions": len(positions),
+        })
     except Exception as e:
         logger.error("Portfolio snapshot job failed: %s", e)
 

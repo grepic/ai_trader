@@ -4,8 +4,10 @@ import {
   AlertTriangle,
   BarChart2,
   BookOpen,
+  FileText,
   LayoutDashboard,
   List,
+  ScrollText,
   Settings,
   Shield,
   TrendingUp,
@@ -20,6 +22,8 @@ const NAV_ITEMS = [
   { to: '/sources', label: 'Sources', icon: BookOpen },
   { to: '/risk', label: 'Risk Controls', icon: Shield },
   { to: '/backtest', label: 'Backtest', icon: List },
+  { to: '/reports', label: 'Reports', icon: FileText },
+  { to: '/logs', label: 'Logs', icon: ScrollText },
   { to: '/settings', label: 'Settings', icon: Settings },
 ]
 

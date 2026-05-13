@@ -8,6 +8,7 @@ import type {
   PortfolioSnapshot,
   RiskStatus,
   SourceItem,
+  SystemLog,
   TradeDecision,
   VerifiedEvent,
   WatchlistTicker,
@@ -81,6 +82,15 @@ export const removeTicker = (ticker: string) =>
 // --- Reports ---
 export const getDailyReports = (limit = 30) =>
   request<DailyReport[]>(`/api/reports/daily?limit=${limit}`)
+
+// --- Logs ---
+export const getLogs = (limit = 200, level?: string, component?: string, ticker?: string) => {
+  const params = new URLSearchParams({ limit: String(limit) })
+  if (level) params.set('level', level)
+  if (component) params.set('component', component)
+  if (ticker) params.set('ticker', ticker)
+  return request<SystemLog[]>(`/api/logs?${params}`)
+}
 
 // --- Backtest ---
 export const runBacktest = (payload: BacktestRequest) =>

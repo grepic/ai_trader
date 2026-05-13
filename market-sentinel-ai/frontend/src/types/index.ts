@@ -168,6 +168,16 @@ export interface BacktestRequest {
   strategy: string
 }
 
+export interface SystemLog {
+  id: string
+  level: 'DEBUG' | 'INFO' | 'WARNING' | 'ERROR'
+  component: string
+  message: string
+  ticker: string | null
+  data: Record<string, unknown> | null
+  created_at: string
+}
+
 export interface BacktestResult {
   strategy: string
   tickers: string[]

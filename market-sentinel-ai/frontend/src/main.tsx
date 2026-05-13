@@ -11,6 +11,8 @@ import { Sources } from './pages/Sources'
 import { RiskControls } from './pages/RiskControls'
 import { Settings } from './pages/Settings'
 import { Backtest } from './pages/Backtest'
+import { Reports } from './pages/Reports'
+import { Logs } from './pages/Logs'
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
@@ -24,6 +26,8 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
           <Route path="sources" element={<Sources />} />
           <Route path="risk" element={<RiskControls />} />
           <Route path="backtest" element={<Backtest />} />
+          <Route path="reports" element={<Reports />} />
+          <Route path="logs" element={<Logs />} />
           <Route path="settings" element={<Settings />} />
         </Route>
       </Routes>

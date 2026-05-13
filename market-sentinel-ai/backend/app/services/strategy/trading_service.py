@@ -28,6 +28,7 @@ from app.services.reporting.reporter import ReportingService
 from app.services.risk.engine import RiskEngine
 from app.services.strategy.strategies import DEFAULT_ACTIVE_STRATEGIES, evaluate_strategies
 from app.services.verification.engine import VerificationEngine
+from app.ws.manager import ws_manager
 
 logger = logging.getLogger(__name__)
 
@@ -162,6 +163,17 @@ class TradingService:
             ticker,
         )
 
+        # Broadcast signal event to dashboard clients
+        await ws_manager.broadcast("signal", {
+            "id": ai_signal.id,
+            "ticker": ai_signal.ticker,
+            "trade_decision": ai_signal.trade_decision,
+            "confidence": ai_signal.confidence,
+            "sentiment": ai_signal.sentiment,
+            "risk_level": ai_signal.risk_level,
+            "event_summary": ai_signal.event_summary[:200],
+        })
+
         # Alert-only signals — send notification but don't trade
         if ai_signal.trade_decision in ("ALERT_ONLY", "IGNORE"):
             if ai_signal.confidence >= 50:
@@ -289,6 +301,16 @@ class TradingService:
                 ticker,
                 {"order_id": broker_order.broker_order_id, "signal_id": signal.id},
             )
+
+            # Broadcast trade event to dashboard clients
+            await ws_manager.broadcast("trade", {
+                "ticker": ticker,
+                "side": side,
+                "quantity": qty,
+                "price": broker_order.filled_price or current_price,
+                "status": broker_order.status,
+                "paper_mode": decision.paper_mode,
+            })
 
             # Send trade execution alert
             await self._reporter.send_telegram(

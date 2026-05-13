@@ -284,3 +284,15 @@ class BacktestResult(BaseModel):
     best_trade: dict[str, Any] | None
     worst_trade: dict[str, Any] | None
     equity_curve: list[dict[str, Any]]
+
+
+# --- System Logs ---
+
+class SystemLogOut(_Base):
+    id: str
+    level: str
+    component: str
+    message: str
+    ticker: str | None
+    data: dict[str, Any] | None
+    created_at: datetime

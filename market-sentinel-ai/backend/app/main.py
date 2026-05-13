@@ -13,6 +13,7 @@ from app.database import create_tables
 from app.jobs.scheduler import create_scheduler
 from app.api.routers import (
     backtest,
+    logs,
     overview,
     positions,
     reports,
@@ -22,6 +23,7 @@ from app.api.routers import (
     trades,
     watchlist,
 )
+from app.ws.router import router as ws_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -105,6 +107,7 @@ def create_app() -> FastAPI:
     )
 
     # Register all routers
+    app.include_router(ws_router)
     app.include_router(overview.router)
     app.include_router(signals.router)
     app.include_router(trades.router)
@@ -114,6 +117,7 @@ def create_app() -> FastAPI:
     app.include_router(watchlist.router)
     app.include_router(reports.router)
     app.include_router(backtest.router)
+    app.include_router(logs.router)
 
     return app
 

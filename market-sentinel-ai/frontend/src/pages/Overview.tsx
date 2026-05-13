@@ -1,19 +1,31 @@
+import { useCallback, useState } from 'react'
 import {
   Activity,
   AlertCircle,
   AlertTriangle,
   BarChart2,
-  CheckCircle,
   DollarSign,
   TrendingDown,
   TrendingUp,
+  Wifi,
+  WifiOff,
   Zap,
 } from 'lucide-react'
+import {
+  Area,
+  AreaChart,
+  CartesianGrid,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts'
 import { getOverview } from '../api/client'
 import { useApi } from '../hooks/useApi'
+import { useWebSocket } from '../hooks/useWebSocket'
 import { Badge } from '../components/ui/Badge'
 import { Card, StatCard } from '../components/ui/Card'
-import type { AISignal } from '../types'
+import type { AISignal, PortfolioSnapshot } from '../types'
 
 function fmt(n: number, prefix = '$') {
   return `${prefix}${Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
@@ -61,8 +73,46 @@ function SignalRow({ s }: { s: AISignal }) {
   )
 }
 
+interface EquityPoint {
+  time: string
+  equity: number
+}
+
 export function Overview() {
-  const { data, loading, error } = useApi(getOverview, [], 30_000)
+  const { data, loading, error, refetch: refresh } = useApi(getOverview, [], 30_000)
+  const [wsConnected, setWsConnected] = useState(false)
+  const [equityCurve, setEquityCurve] = useState<EquityPoint[]>([])
+  const [liveSignals, setLiveSignals] = useState<AISignal[]>([])
+
+  const handlePortfolio = useCallback((event: { data: PortfolioSnapshot; ts: string }) => {
+    setEquityCurve((prev) => {
+      const point = {
+        time: new Date(event.ts).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+        equity: event.data.account_value,
+      }
+      const next = [...prev.slice(-59), point]
+      return next
+    })
+    refresh()
+  }, [refresh])
+
+  const handleSignal = useCallback((event: { data: AISignal; ts: string }) => {
+    setLiveSignals((prev) => [{ ...event.data, created_at: event.ts }, ...prev.slice(0, 9)])
+    refresh()
+  }, [refresh])
+
+  const [lastHeartbeat, setLastHeartbeat] = useState<number>(0)
+
+  useWebSocket({
+    portfolio: handlePortfolio as never,
+    signal: handleSignal as never,
+    trade: () => refresh(),
+    risk: () => refresh(),
+    heartbeat: () => {
+      setWsConnected(true)
+      setLastHeartbeat(Date.now())
+    },
+  })
 
   if (loading) return <div className="text-gray-500 text-sm">Loading overview…</div>
   if (error) return <div className="text-red-500 text-sm">Error: {error}</div>
@@ -71,6 +121,12 @@ export function Overview() {
   const { bot_status: bs, portfolio: port, recent_signals, risk_status: rs } = data
   const pl = bs.daily_pl
   const plPositive = pl >= 0
+
+  // Merge live signals on top of polled ones
+  const allSignals = liveSignals.length > 0 ? liveSignals : recent_signals
+
+  // Build equity curve from snapshots if no live data yet
+  const chartData = equityCurve.length > 1 ? equityCurve : null
 
   return (
     <div className="space-y-6">
@@ -81,7 +137,21 @@ export function Overview() {
             Last updated: {new Date(bs.last_updated).toLocaleTimeString()}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap justify-end">
+          {/* WebSocket live indicator */}
+          <div className="flex items-center gap-1.5 text-xs text-gray-500">
+            {wsConnected && Date.now() - lastHeartbeat < 60_000 ? (
+              <>
+                <Wifi className="w-3.5 h-3.5 text-green-500" />
+                <span className="text-green-600">Live</span>
+              </>
+            ) : (
+              <>
+                <WifiOff className="w-3.5 h-3.5 text-gray-400" />
+                <span>Polling</span>
+              </>
+            )}
+          </div>
           {bs.emergency_stopped ? (
             <Badge label="🚨 EMERGENCY STOPPED" variant="red" size="md" />
           ) : bs.running ? (
@@ -166,14 +236,50 @@ export function Overview() {
         )}
       </Card>
 
-      {/* Recent signals */}
+      {/* Equity curve (live) */}
+      {chartData && (
+        <Card title="Session Equity Curve" subtitle="Live portfolio value (last 60 snapshots)">
+          <ResponsiveContainer width="100%" height={160}>
+            <AreaChart data={chartData} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+              <defs>
+                <linearGradient id="eqGrad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.25} />
+                  <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+              <XAxis dataKey="time" tick={{ fontSize: 10 }} interval="preserveStartEnd" />
+              <YAxis
+                tick={{ fontSize: 10 }}
+                tickFormatter={(v) => `$${(v / 1000).toFixed(1)}k`}
+                domain={['auto', 'auto']}
+              />
+              <Tooltip
+                formatter={(v: number) => [`$${v.toLocaleString('en-US', { maximumFractionDigits: 2 })}`, 'Equity']}
+                labelStyle={{ fontSize: 11 }}
+                contentStyle={{ fontSize: 11 }}
+              />
+              <Area
+                type="monotone"
+                dataKey="equity"
+                stroke="#3b82f6"
+                strokeWidth={2}
+                fill="url(#eqGrad)"
+                dot={false}
+              />
+            </AreaChart>
+          </ResponsiveContainer>
+        </Card>
+      )}
+
+      {/* Recent signals + portfolio */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <Card title="Recent Signals" subtitle="Latest AI-generated trading signals">
-          {recent_signals.length === 0 ? (
+          {allSignals.length === 0 ? (
             <p className="text-sm text-gray-400 text-center py-4">No signals yet</p>
           ) : (
             <div className="divide-y divide-gray-50">
-              {recent_signals.slice(0, 6).map((s) => (
+              {allSignals.slice(0, 6).map((s) => (
                 <SignalRow key={s.id} s={s} />
               ))}
             </div>
