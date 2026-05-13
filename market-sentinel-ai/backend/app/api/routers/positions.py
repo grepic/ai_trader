@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 from app.api.deps import Broker, DbSession
 from app.models.core import PositionSnapshot, PortfolioSnapshot
@@ -64,3 +64,25 @@ async def get_portfolio(broker: Broker, db: DbSession):
     db.add(snap)
     await db.flush()
     return PortfolioSnapshotOut.model_validate(snap)
+
+
+@router.post("/{ticker}/close")
+async def close_position(ticker: str, broker: Broker):
+    """Close (liquidate) a specific open position via the broker."""
+    ticker = ticker.upper()
+    positions = await broker.get_positions()
+    open_tickers = {p.ticker for p in positions}
+
+    if ticker not in open_tickers:
+        raise HTTPException(status_code=404, detail=f"No open position for {ticker}")
+
+    order = await broker.close_position(ticker)
+    if not order:
+        raise HTTPException(status_code=500, detail=f"Broker failed to close {ticker}")
+
+    return {
+        "status": "closed",
+        "ticker": ticker,
+        "broker_order_id": order.broker_order_id,
+        "filled_price": order.filled_price,
+    }

@@ -64,10 +64,8 @@ services:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
-      start_period: 40s
+      start_period: 60s
       retries: 3
-    volumes:
-      - ./backend:/app:ro  # Read-only bind for dev hot reload
 
   # -----------------------------------------------------------------------
   # Frontend dashboard
@@ -81,7 +79,8 @@ services:
     ports:
       - "3000:80"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
 
 volumes:
   postgres_data:

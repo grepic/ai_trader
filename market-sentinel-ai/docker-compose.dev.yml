@@ -1,14 +1,17 @@
 # Development override — hot reload for backend, Vite dev server for frontend
+# Usage: docker compose -f docker-compose.yml -f docker-compose.dev.yml up
 version: "3.9"
 
 services:
   backend:
+    # Override entrypoint — skip alembic in dev (run manually)
+    entrypoint: []
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     volumes:
-      - ./backend:/app  # Writable for hot reload
+      - ./backend:/app  # Writable bind for hot reload
 
   frontend:
-    build: .  # Not used in dev
+    build: .  # Not used in dev — replaced by Vite
     image: node:20-alpine
     container_name: sentinel_frontend_dev
     working_dir: /app

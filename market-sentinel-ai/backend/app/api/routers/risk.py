@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 from app.api.deps import Broker, Risk
+from app.api.rate_limit import bot_control_limiter
 from app.config import get_settings
 from app.schemas.core import RiskStatusOut
 
@@ -42,13 +43,13 @@ async def get_risk_status(risk: Risk, broker: Broker):
     )
 
 
-@router.post("/bot/pause")
+@router.post("/bot/pause", dependencies=[Depends(bot_control_limiter)])
 async def pause_bot(risk: Risk):
     risk.pause()
     return {"status": "paused", "message": "Bot has been manually paused. No new trades will execute."}
 
 
-@router.post("/bot/resume")
+@router.post("/bot/resume", dependencies=[Depends(bot_control_limiter)])
 async def resume_bot(risk: Risk):
     if risk.get_status()["emergency_stopped"]:
         raise HTTPException(
@@ -59,7 +60,7 @@ async def resume_bot(risk: Risk):
     return {"status": "running", "message": "Bot resumed."}
 
 
-@router.post("/bot/emergency-stop")
+@router.post("/bot/emergency-stop", dependencies=[Depends(bot_control_limiter)])
 async def emergency_stop(risk: Risk, broker: Broker):
     risk.emergency_stop()
     # Close all positions on emergency stop

@@ -221,21 +221,33 @@ async def job_risk_monitor() -> None:
         # Alert at 70% of daily loss limit
         pct = status["daily_loss_pct"]
         if 70 <= pct < 100:
-            await reporter.send_telegram(
-                reporter.format_risk_alert_telegram(
-                    event_type="daily_loss_warning",
-                    description=f"Daily loss at {pct:.0f}% of ${status['max_daily_loss_usd']:.0f} limit (${status['daily_loss_usd']:.2f} used)",
-                    severity="warning",
-                )
+            msg = reporter.format_risk_alert_telegram(
+                event_type="daily_loss_warning",
+                description=f"Daily loss at {pct:.0f}% of ${status['max_daily_loss_usd']:.0f} limit (${status['daily_loss_usd']:.2f} used)",
+                severity="warning",
             )
+            await reporter.send_telegram(msg)
+            await ws_manager.broadcast("risk", {
+                "event_type": "daily_loss_warning",
+                "severity": "warning",
+                "daily_loss_pct": pct,
+                "daily_loss_usd": status["daily_loss_usd"],
+                "max_daily_loss_usd": status["max_daily_loss_usd"],
+            })
         elif pct >= 100:
-            await reporter.send_telegram(
-                reporter.format_risk_alert_telegram(
-                    event_type="daily_loss_limit_reached",
-                    description=f"Daily loss limit REACHED: ${status['daily_loss_usd']:.2f}. Trading suspended for today.",
-                    severity="critical",
-                )
+            msg = reporter.format_risk_alert_telegram(
+                event_type="daily_loss_limit_reached",
+                description=f"Daily loss limit REACHED: ${status['daily_loss_usd']:.2f}. Trading suspended for today.",
+                severity="critical",
             )
+            await reporter.send_telegram(msg)
+            await ws_manager.broadcast("risk", {
+                "event_type": "daily_loss_limit_reached",
+                "severity": "critical",
+                "daily_loss_pct": pct,
+                "daily_loss_usd": status["daily_loss_usd"],
+                "max_daily_loss_usd": status["max_daily_loss_usd"],
+            })
     except Exception as e:
         logger.error("Risk monitor job failed: %s", e)
 

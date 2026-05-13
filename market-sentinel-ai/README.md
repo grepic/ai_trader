@@ -103,17 +103,23 @@ npm run dev
 ```bash
 cd backend
 
-# Install test dependencies
+# Install dependencies
 pip install -r requirements.txt
 
-# Run all tests
+# Run all tests (unit + API integration + pipeline integration)
 pytest
 
-# Run with coverage
+# Run with coverage report
 pytest --cov=app --cov-report=term-missing
 
-# Run specific test file
-pytest app/tests/test_risk_engine.py -v
+# Run specific suites
+pytest app/tests/test_risk_engine.py -v      # Risk engine unit tests
+pytest app/tests/test_strategies.py -v      # Strategy unit tests
+pytest app/tests/test_api.py -v             # API endpoint integration tests
+pytest app/tests/test_pipeline.py -v        # Full trading pipeline tests
+pytest app/tests/test_backtesting.py -v     # Backtesting engine tests
+pytest app/tests/test_verification.py -v    # Source verification tests
+pytest app/tests/test_mock_broker.py -v     # Mock broker tests
 ```
 
 ---
@@ -255,7 +261,11 @@ Full interactive docs available at: http://localhost:8000/docs
 | POST | `/api/watchlist` | Add ticker |
 | DELETE | `/api/watchlist/{ticker}` | Remove ticker |
 | GET | `/api/reports/daily` | Daily reports |
+| GET | `/api/reports/daily/{date}` | Report for specific date |
+| GET | `/api/logs` | System audit log (filters: level, ticker, component) |
+| POST | `/api/positions/{ticker}/close` | Close a specific open position |
 | POST | `/api/backtest/run` | Run backtest |
+| WS  | `/ws` | Real-time event stream |
 
 ---
 
@@ -263,14 +273,30 @@ Full interactive docs available at: http://localhost:8000/docs
 
 | Page | Path | Description |
 |------|------|-------------|
-| Overview | `/` | Bot status, P/L, risk meter, recent signals |
+| Overview | `/` | Bot status, P/L, risk meter, live equity curve, recent signals |
 | Signals | `/signals` | AI-generated trading signals with reasoning |
 | Trades | `/trades` | Trade decisions + execution status |
 | Positions | `/positions` | Open positions with live P/L |
 | Sources | `/sources` | Raw data and verification scores |
 | Risk Controls | `/risk` | Pause/resume/emergency stop |
 | Backtest | `/backtest` | Historical strategy simulation |
+| Reports | `/reports` | Daily P&L summaries with win rate and trade stats |
+| Logs | `/logs` | Filterable system audit log (level, ticker, component) |
 | Settings | `/settings` | Watchlist and API key management |
+
+### Real-time WebSocket
+
+The dashboard connects to `ws://localhost:3000/ws` and receives live events:
+
+```json
+{ "type": "signal",    "data": { "ticker": "AAPL", "trade_decision": "BUY", ... }, "ts": "..." }
+{ "type": "trade",     "data": { "ticker": "AAPL", "side": "buy", "quantity": 2, ... }, "ts": "..." }
+{ "type": "portfolio", "data": { "account_value": 10250.0, ... }, "ts": "..." }
+{ "type": "risk",      "data": { "event_type": "daily_loss_warning", "severity": "warning", ... }, "ts": "..." }
+{ "type": "heartbeat", "data": { "connections": 1 }, "ts": "..." }
+```
+
+The Overview page shows a live equity curve that builds up from portfolio events in real time. The connection auto-reconnects with exponential backoff on disconnect.
 
 ---
 
@@ -301,7 +327,8 @@ If ANY check fails, the trade is blocked and the reason is logged.
 |-----|-----------|-------------|
 | `ingest_data` | Every 2 min | Collect from all data sources |
 | `process_signals` | Every 1 min | Verify → AI → Risk → Trade |
-| `portfolio_snapshot` | Every 5 min | Save portfolio state |
+| `portfolio_snapshot` | Every 5 min | Save portfolio state + WS broadcast |
+| `risk_monitor` | Every 10 min | Alert at 70%/100% of daily loss limit |
 | `morning_report` | 9:00 AM ET | Pre-market briefing |
 | `daily_report` | 4:30 PM ET | End-of-day summary |
 
