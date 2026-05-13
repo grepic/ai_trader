@@ -1,13 +1,11 @@
 """pytest configuration — async fixtures and test settings."""
 
 import os
-import pytest
 
-# Use in-memory SQLite for tests to avoid requiring PostgreSQL
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
-os.environ.setdefault("PAPER_TRADING_ONLY", "true")
-os.environ.setdefault("REAL_TRADING_ENABLED", "false")
-os.environ.setdefault("OPENAI_API_KEY", "test-key")
-
-# Make pytest-asyncio work globally
-pytest_plugins = ["pytest_asyncio"]
+# Use in-memory SQLite for tests (no PostgreSQL required)
+os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
+os.environ["PAPER_TRADING_ONLY"] = "true"
+os.environ["REAL_TRADING_ENABLED"] = "false"
+os.environ["OPENAI_API_KEY"] = "test-key-not-real"
+os.environ["ALPACA_API_KEY"] = ""
+os.environ["ALPACA_SECRET_KEY"] = ""

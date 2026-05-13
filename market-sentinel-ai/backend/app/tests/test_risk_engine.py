@@ -84,9 +84,10 @@ class TestManualPause:
         risk.pause()
         risk.resume()
         signal = make_signal()
+        # Use price within max_trade_size_usd ($25 default) so trade size check passes
         result = await risk.check_trade(
             signal=signal,
-            current_price=150.0,
+            current_price=10.0,
             account_cash=10000.0,
             open_position_count=0,
             market_open=True,
@@ -117,7 +118,7 @@ class TestDailyLossLimit:
         signal = make_signal()
         result = await risk.check_trade(
             signal=signal,
-            current_price=150.0,
+            current_price=10.0,  # price within $25 max trade size
             account_cash=10000.0,
             open_position_count=0,
             market_open=True,
@@ -144,7 +145,7 @@ class TestConfidenceThreshold:
         signal = make_signal(confidence=90.0)
         result = await risk.check_trade(
             signal=signal,
-            current_price=150.0,
+            current_price=10.0,  # price within $25 max trade size
             account_cash=10000.0,
             open_position_count=0,
             market_open=True,

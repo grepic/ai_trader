@@ -10,17 +10,19 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from app.database import AsyncSessionLocal
-from app.models.core import DailyReport, PortfolioSnapshot, RiskEvent
+from app.models.core import AISignal, DailyReport, PortfolioSnapshot, RiskEvent
 from app.services.broker.factory import get_broker_client
 from app.services.data_ingestion.ingestion_service import DataIngestionService
 from app.services.reporting.reporter import ReportingService
 from app.services.risk.engine import RiskEngine
+from app.services.strategy.pnl_tracker import PnLTracker
 from app.services.strategy.trading_service import TradingService
 
 logger = logging.getLogger(__name__)
 
 _risk_engine: RiskEngine | None = None
 reporter = ReportingService()
+pnl_tracker = PnLTracker()
 
 
 def _get_risk() -> RiskEngine:
@@ -35,31 +37,35 @@ def _get_risk() -> RiskEngine:
 # ---------------------------------------------------------------------------
 
 async def job_ingest_data() -> None:
-    """Collect data from all sources."""
+    """Collect data from all configured sources."""
     try:
         async with AsyncSessionLocal() as db:
             service = DataIngestionService(db)
             count = await service.ingest_all()
-            logger.info("Ingestion job: %d new items", count)
+            await db.commit()
+            if count:
+                logger.info("Ingestion job: %d new items collected", count)
     except Exception as e:
         logger.error("Ingestion job failed: %s", e)
 
 
 async def job_process_signals() -> None:
-    """Verify sources → AI analysis → risk check → paper trade."""
+    """Verify sources → AI analysis → strategy → risk check → paper trade."""
     try:
         broker = get_broker_client()
         risk = _get_risk()
         async with AsyncSessionLocal() as db:
             service = TradingService(db=db, broker=broker, risk_engine=risk)
             count = await service.process_unprocessed_items()
-            logger.info("Signal processing job: %d items processed", count)
+            await db.commit()
+            if count:
+                logger.info("Signal processing: %d items processed", count)
     except Exception as e:
         logger.error("Signal processing job failed: %s", e)
 
 
 async def job_portfolio_snapshot() -> None:
-    """Snapshot portfolio state to DB."""
+    """Snapshot portfolio state to DB with realized P&L."""
     try:
         broker = get_broker_client()
         account = await broker.get_account()
@@ -69,60 +75,90 @@ async def job_portfolio_snapshot() -> None:
         unrealized_pl = sum(p.unrealized_pl for p in positions)
 
         async with AsyncSessionLocal() as db:
+            realized_pl = await pnl_tracker.get_daily_realized_pnl(db)
+            trade_stats = await pnl_tracker.get_trade_stats_today(db)
+
             snap = PortfolioSnapshot(
                 account_value=account.equity,
                 cash_balance=account.cash,
                 positions_value=positions_value,
                 unrealized_pl=unrealized_pl,
-                realized_pl_today=0.0,
+                realized_pl_today=realized_pl,
                 daily_pl=account.equity - account.last_equity,
-                trades_today=_get_risk().get_status()["trades_today"],
+                trades_today=trade_stats["total_trades"],
                 open_positions=len(positions),
                 paper_mode=broker.is_paper,
                 snapshot_at=datetime.now(timezone.utc),
             )
             db.add(snap)
             await db.commit()
-        logger.info("Portfolio snapshot saved. Equity: $%.2f", account.equity)
+
+        logger.info(
+            "Portfolio snapshot: equity=$%.2f positions=%d upl=$%.2f rpl=$%.2f",
+            account.equity, len(positions), unrealized_pl, realized_pl,
+        )
     except Exception as e:
         logger.error("Portfolio snapshot job failed: %s", e)
 
 
 async def job_daily_report() -> None:
-    """Generate and send end-of-day report."""
+    """Generate and send end-of-day summary report."""
     try:
         broker = get_broker_client()
         account = await broker.get_account()
+        positions = await broker.get_positions()
         risk = _get_risk()
-
         today = date.today().isoformat()
-        report_data = {
-            "report_date": today,
-            "account_value": account.equity,
-            "cash_balance": account.cash,
-            "daily_pl": account.equity - account.last_equity,
-            "realized_pl": 0.0,
-            "unrealized_pl": 0.0,
-            "total_trades": risk.get_status()["trades_today"],
-            "winning_trades": 0,
-            "losing_trades": 0,
-            "signals_generated": 0,
-            "signals_traded": 0,
-            "signals_alerted": 0,
-            "signals_ignored": 0,
-            "risk_events_count": 0,
-            "paper_mode": broker.is_paper,
-        }
-
-        msg = reporter.format_daily_report_telegram(report_data)
-        tg_sent = await reporter.send_telegram(msg)
-
-        email_html = reporter.format_email_daily_report(report_data)
-        email_sent = await reporter.send_email(
-            f"Market Sentinel AI — Daily Report {today}", email_html
-        )
 
         async with AsyncSessionLocal() as db:
+            realized_pl = await pnl_tracker.get_daily_realized_pnl(db)
+            trade_stats = await pnl_tracker.get_trade_stats_today(db)
+
+            # Count signals generated today
+            from sqlalchemy import select, func
+            today_start = datetime.combine(date.today(), datetime.min.time()).replace(tzinfo=timezone.utc)
+            sig_result = await db.execute(
+                select(func.count(AISignal.id)).where(AISignal.created_at >= today_start)
+            )
+            signals_today = sig_result.scalar() or 0
+
+            risk_events_result = await db.execute(
+                select(func.count(RiskEvent.id)).where(RiskEvent.created_at >= today_start)
+            )
+            risk_events = risk_events_result.scalar() or 0
+
+            unrealized_pl = sum(p.unrealized_pl for p in positions)
+
+            report_data = {
+                "report_date": today,
+                "account_value": account.equity,
+                "cash_balance": account.cash,
+                "daily_pl": account.equity - account.last_equity,
+                "realized_pl": realized_pl,
+                "unrealized_pl": unrealized_pl,
+                "total_trades": trade_stats["total_trades"],
+                "winning_trades": trade_stats["winning_trades"],
+                "losing_trades": trade_stats["losing_trades"],
+                "signals_generated": signals_today,
+                "signals_traded": trade_stats["total_trades"],
+                "signals_alerted": max(0, signals_today - trade_stats["total_trades"]),
+                "signals_ignored": 0,
+                "best_trade_ticker": trade_stats["best_trade_ticker"],
+                "best_trade_pl": trade_stats["best_trade_pl"],
+                "worst_trade_ticker": trade_stats["worst_trade_ticker"],
+                "worst_trade_pl": trade_stats["worst_trade_pl"],
+                "risk_events_count": risk_events,
+                "paper_mode": broker.is_paper,
+            }
+
+            msg = reporter.format_daily_report_telegram(report_data)
+            tg_sent = await reporter.send_telegram(msg)
+
+            email_html = reporter.format_email_daily_report(report_data)
+            email_sent = await reporter.send_email(
+                f"Market Sentinel AI — Daily Report {today}", email_html
+            )
+
             report = DailyReport(
                 **{k: v for k, v in report_data.items()},
                 sent_telegram=tg_sent,
@@ -165,6 +201,34 @@ async def job_morning_report() -> None:
         logger.error("Morning report job failed: %s", e)
 
 
+async def job_risk_monitor() -> None:
+    """Check risk thresholds and send alerts if approaching limits."""
+    try:
+        risk = _get_risk()
+        status = risk.get_status()
+
+        # Alert at 70% of daily loss limit
+        pct = status["daily_loss_pct"]
+        if 70 <= pct < 100:
+            await reporter.send_telegram(
+                reporter.format_risk_alert_telegram(
+                    event_type="daily_loss_warning",
+                    description=f"Daily loss at {pct:.0f}% of ${status['max_daily_loss_usd']:.0f} limit (${status['daily_loss_usd']:.2f} used)",
+                    severity="warning",
+                )
+            )
+        elif pct >= 100:
+            await reporter.send_telegram(
+                reporter.format_risk_alert_telegram(
+                    event_type="daily_loss_limit_reached",
+                    description=f"Daily loss limit REACHED: ${status['daily_loss_usd']:.2f}. Trading suspended for today.",
+                    severity="critical",
+                )
+            )
+    except Exception as e:
+        logger.error("Risk monitor job failed: %s", e)
+
+
 # ---------------------------------------------------------------------------
 # Scheduler setup
 # ---------------------------------------------------------------------------
@@ -180,6 +244,7 @@ def create_scheduler() -> AsyncIOScheduler:
         name="Data Ingestion",
         max_instances=1,
         coalesce=True,
+        misfire_grace_time=30,
     )
 
     # Signal processing — every 1 minute
@@ -190,6 +255,7 @@ def create_scheduler() -> AsyncIOScheduler:
         name="Signal Processing",
         max_instances=1,
         coalesce=True,
+        misfire_grace_time=30,
     )
 
     # Portfolio snapshot — every 5 minutes
@@ -202,7 +268,17 @@ def create_scheduler() -> AsyncIOScheduler:
         coalesce=True,
     )
 
-    # Daily report — 4:30 PM ET (21:30 UTC)
+    # Risk monitor — every 10 minutes during market hours
+    scheduler.add_job(
+        job_risk_monitor,
+        trigger=IntervalTrigger(minutes=10),
+        id="risk_monitor",
+        name="Risk Monitor",
+        max_instances=1,
+        coalesce=True,
+    )
+
+    # Daily report — 4:30 PM ET (21:30 UTC, after market close)
     scheduler.add_job(
         job_daily_report,
         trigger=CronTrigger(hour=21, minute=30, timezone="UTC"),
@@ -211,7 +287,7 @@ def create_scheduler() -> AsyncIOScheduler:
         max_instances=1,
     )
 
-    # Morning report — 9:00 AM ET (14:00 UTC)
+    # Morning report — 9:00 AM ET (14:00 UTC, before market open)
     scheduler.add_job(
         job_morning_report,
         trigger=CronTrigger(hour=14, minute=0, timezone="UTC"),
