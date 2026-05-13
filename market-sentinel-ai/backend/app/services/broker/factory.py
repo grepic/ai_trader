@@ -19,5 +19,5 @@ def get_broker_client() -> BrokerClient:
             secret_key=settings.alpaca_secret_key,
             base_url=settings.alpaca_base_url,
         )
-    # Fall back to mock broker when Alpaca credentials are not configured
-    return MockBrokerClient()
+    # Fall back to mock broker with live yfinance prices when Alpaca is not configured
+    return MockBrokerClient(use_live_prices=True)

@@ -1,12 +1,15 @@
-"""Simple backtesting engine — replays historical signals against mock price data."""
+"""Backtesting engine — uses real yfinance data with synthetic fallback."""
 
 from __future__ import annotations
 
+import logging
 import math
 import random
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -133,9 +136,22 @@ class BacktestEngine:
 
     def _get_price_series(self, ticker: str, start: date, days: int) -> list[float]:
         """
-        Generate a synthetic price walk for demo purposes.
-        Replace with real OHLCV data (Alpaca, Yahoo, etc.) in production.
+        Fetch daily closing prices from yfinance. Falls back to synthetic data
+        if yfinance is unavailable (network error, invalid ticker, test env).
         """
+        end = start + timedelta(days=days + 5)
+        try:
+            from app.services.market_data.price_feed import _fetch_historical_sync
+            prices = _fetch_historical_sync(ticker, start, end)
+            if prices and len(prices) >= 2:
+                logger.info("Backtest using real yfinance data for %s (%d days)", ticker, len(prices))
+                return prices[:days + 1]
+        except Exception as e:
+            logger.debug("yfinance unavailable for backtest (%s), using synthetic: %s", ticker, e)
+        return self._synthetic_price_series(ticker, start, days)
+
+    def _synthetic_price_series(self, ticker: str, start: date, days: int) -> list[float]:
+        """Deterministic synthetic price walk — used as fallback when yfinance fails."""
         seed_prices = {
             "AAPL": 170.0, "TSLA": 200.0, "NVDA": 450.0,
             "MSFT": 400.0, "GOOGL": 150.0, "AMZN": 180.0, "SPY": 490.0,
@@ -144,7 +160,7 @@ class BacktestEngine:
         rng = random.Random(hash(ticker + str(start)))
         prices = [base]
         for _ in range(days):
-            change = rng.gauss(0.0005, 0.018)  # ~0.05% drift, 1.8% daily vol
+            change = rng.gauss(0.0005, 0.018)
             prices.append(round(prices[-1] * (1 + change), 2))
         return prices
 

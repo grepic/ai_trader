@@ -23,13 +23,20 @@ _MOCK_PRICES: dict[str, float] = {
 
 
 class MockBrokerClient(BrokerClient):
-    """Simulated broker for testing. Maintains in-memory state."""
+    """
+    Simulated broker for testing and paper trading.
 
-    def __init__(self, initial_cash: float = 100_000.0):
+    With use_live_prices=True (default in non-test environments) prices are
+    fetched from yfinance with a 5-minute cache. Set to False for tests so
+    no network calls are made.
+    """
+
+    def __init__(self, initial_cash: float = 100_000.0, use_live_prices: bool = False):
         self._cash = initial_cash
         self._positions: dict[str, Position] = {}
         self._orders: dict[str, BrokerOrder] = {}
         self._market_open = True
+        self._use_live_prices = use_live_prices
 
     @property
     def is_paper(self) -> bool:
@@ -188,8 +195,15 @@ class MockBrokerClient(BrokerClient):
         return orders[-limit:]
 
     async def get_current_price(self, ticker: str) -> float | None:
+        if self._use_live_prices:
+            try:
+                from app.services.market_data.price_feed import get_live_price
+                price = await get_live_price(ticker)
+                if price:
+                    return price
+            except Exception:
+                pass  # Fall through to mock price
         base = _MOCK_PRICES.get(ticker.upper(), 100.0)
-        # Add small random drift to simulate live prices
         return round(base * (1 + random.uniform(-0.005, 0.005)), 2)
 
     async def is_market_open(self) -> bool:

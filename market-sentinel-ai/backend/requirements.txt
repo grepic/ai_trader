@@ -16,6 +16,9 @@ pydantic-settings==2.6.1
 # HTTP client
 httpx==0.28.1
 
+# Market data
+yfinance>=0.2.40
+
 # Scheduler
 apscheduler==3.10.4
 

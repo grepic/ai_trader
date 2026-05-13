@@ -9,8 +9,10 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
+from sqlalchemy import or_, select
+
 from app.database import AsyncSessionLocal
-from app.models.core import AISignal, DailyReport, PortfolioSnapshot, RiskEvent
+from app.models.core import AISignal, DailyReport, PortfolioSnapshot, RiskEvent, TradeDecision
 from app.services.broker.factory import get_broker_client
 from app.services.data_ingestion.ingestion_service import DataIngestionService
 from app.services.reporting.reporter import ReportingService
@@ -252,6 +254,104 @@ async def job_risk_monitor() -> None:
         logger.error("Risk monitor job failed: %s", e)
 
 
+async def job_monitor_positions() -> None:
+    """
+    Check stop-loss and take-profit levels for all open positions.
+    Closes positions automatically when price crosses the thresholds.
+    """
+    try:
+        broker = get_broker_client()
+        if not await broker.is_market_open():
+            return
+
+        positions = await broker.get_positions()
+        if not positions:
+            return
+
+        async with AsyncSessionLocal() as db:
+            for pos in positions:
+                ticker = pos.ticker
+                current_price = pos.current_price
+
+                # Find the most recent executed trade decision with SL/TP set
+                result = await db.execute(
+                    select(TradeDecision)
+                    .where(
+                        TradeDecision.ticker == ticker,
+                        TradeDecision.executed.is_(True),
+                        or_(
+                            TradeDecision.stop_loss_price.isnot(None),
+                            TradeDecision.take_profit_price.isnot(None),
+                        ),
+                    )
+                    .order_by(TradeDecision.created_at.desc())
+                    .limit(1)
+                )
+                decision = result.scalar_one_or_none()
+                if not decision:
+                    continue
+
+                trigger: str | None = None
+                threshold: float | None = None
+
+                if decision.stop_loss_price and current_price <= decision.stop_loss_price:
+                    trigger = "stop_loss"
+                    threshold = decision.stop_loss_price
+                elif decision.take_profit_price and current_price >= decision.take_profit_price:
+                    trigger = "take_profit"
+                    threshold = decision.take_profit_price
+
+                if not trigger:
+                    continue
+
+                logger.info(
+                    "%s triggered for %s: price=%.2f, threshold=%.2f",
+                    trigger.upper(), ticker, current_price, threshold,
+                )
+
+                order = await broker.close_position(ticker)
+                if not order:
+                    logger.warning("Failed to close %s on %s", ticker, trigger)
+                    continue
+
+                pnl = pos.unrealized_pl
+                severity = "warning" if trigger == "stop_loss" else "info"
+                emoji = "🛑" if trigger == "stop_loss" else "🎯"
+
+                msg = (
+                    f"<b>{emoji} {trigger.replace('_', ' ').title()} Hit</b>\n"
+                    f"Ticker: <b>{ticker}</b>\n"
+                    f"Current price: ${current_price:.2f}\n"
+                    f"Threshold: ${threshold:.2f}\n"
+                    f"Unrealized P/L: {'+'if pnl >= 0 else ''}{pnl:.2f}\n"
+                    f"<i>Position closed at market.</i>"
+                )
+                await reporter.send_telegram(msg)
+                await ws_manager.broadcast("trade", {
+                    "ticker": ticker,
+                    "side": "sell",
+                    "trigger": trigger,
+                    "price": current_price,
+                    "threshold": threshold,
+                    "unrealized_pl": pnl,
+                    "paper_mode": broker.is_paper,
+                })
+
+                # Log the risk event
+                async with AsyncSessionLocal() as db2:
+                    db2.add(RiskEvent(
+                        event_type=trigger,
+                        severity=severity,
+                        ticker=ticker,
+                        description=f"{trigger.replace('_',' ').title()} hit at ${current_price:.2f} (threshold: ${threshold:.2f})",
+                        action_taken=f"Position closed at market. P/L: {'+'if pnl >= 0 else ''}{pnl:.2f}",
+                    ))
+                    await db2.commit()
+
+    except Exception as e:
+        logger.error("Position monitor job failed: %s", e)
+
+
 # ---------------------------------------------------------------------------
 # Scheduler setup
 # ---------------------------------------------------------------------------
@@ -297,6 +397,16 @@ def create_scheduler() -> AsyncIOScheduler:
         trigger=IntervalTrigger(minutes=10),
         id="risk_monitor",
         name="Risk Monitor",
+        max_instances=1,
+        coalesce=True,
+    )
+
+    # Stop-loss / take-profit position monitor — every 5 minutes
+    scheduler.add_job(
+        job_monitor_positions,
+        trigger=IntervalTrigger(minutes=5),
+        id="monitor_positions",
+        name="Position Monitor (SL/TP)",
         max_instances=1,
         coalesce=True,
     )
